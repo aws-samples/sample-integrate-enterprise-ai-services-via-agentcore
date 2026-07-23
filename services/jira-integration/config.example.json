@@ -1,0 +1,16 @@
+{
+  "_comment": "Copy this file to config.json and fill in your values, OR set the JIRA_* variables in config.env. config.json is gitignored. The API token is NEVER stored here - it goes into AWS Secrets Manager (see notes below).",
+  "base_url": "https://your-domain.atlassian.net",
+  "email": "you@example.com",
+  "auth_method": "api_token_basic",
+  "secrets_manager": {
+    "_comment": "deploy.sh creates/updates this secret from the JIRA token you supply interactively or via the JIRA_API_TOKEN env var. The gateway credential provider reads it at setup time.",
+    "secret_name": "agentcore-gw-demo/jira-api-token",
+    "json_key": "api_token"
+  },
+  "gateway_target": {
+    "endpoint": "https://your-domain.atlassian.net/rest/api/3",
+    "protocol_type": "CUSTOM",
+    "schema_file": "jira-openapi-subset.yaml"
+  }
+}

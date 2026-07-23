@@ -1,0 +1,54 @@
+# Placeholders (${...}) are substituted by scripts/render-k8s.sh at deploy time.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: langgraph-agent
+  namespace: ${K8S_NAMESPACE}
+  labels:
+    app: langgraph-agent
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: langgraph-agent
+  template:
+    metadata:
+      labels:
+        app: langgraph-agent
+    spec:
+      serviceAccountName: ${SERVICE_ACCOUNT_NAME}
+      containers:
+        - name: langgraph-agent
+          image: ${ECR_REGISTRY}/${ECR_REPO_LANGGRAPH}:${IMAGE_TAG}
+          ports:
+            - containerPort: 8080
+          env:
+            - name: AWS_REGION
+              value: "${AWS_REGION}"
+            - name: BEDROCK_MODEL_ID
+              value: "${BEDROCK_MODEL_ID}"
+            - name: COGNITO_USER_POOL_ID
+              value: "${COGNITO_USER_POOL_ID}"
+            - name: COGNITO_APP_CLIENT_ID
+              value: "${COGNITO_RESOURCE_CLIENT_ID}"
+            - name: AUTH_DISABLED
+              value: "false"
+          readinessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: 8080
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1"
+              memory: "1Gi"

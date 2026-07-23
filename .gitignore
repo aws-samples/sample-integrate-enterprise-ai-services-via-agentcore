@@ -1,0 +1,40 @@
+# ---- Python ----
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ---- Node / CDK ----
+node_modules/
+cdk.out/
+.cdk.staging/
+*.tsbuildinfo
+# Account-specific lookup cache - regenerated per environment.
+cdk.context.json
+
+# ---- AWS / secrets (NEVER commit) ----
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials
+aws-exports.js
+
+# ---- Generated deployment state ----
+# Written by deploy.sh / CDK outputs; regenerated on every deploy.
+deploy-outputs.json
+deploy-outputs.env
+gateway/generated-*.json
+services/jira-integration/config.json
+kubeconfig*
+
+# ---- Local tooling ----
+.DS_Store
+*.log
+.idea/
+.vscode/
