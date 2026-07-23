@@ -1,0 +1,5 @@
+# The gateway APIs require a recent botocore that includes the
+# bedrock-agentcore-control service model.
+boto3>=1.40.0
+PyYAML==6.0.2
+httpx==0.28.1

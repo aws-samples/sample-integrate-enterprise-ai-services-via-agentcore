@@ -1,0 +1,9 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
+httpx==0.28.1
+python-jose[cryptography]==3.3.0
+langgraph==0.2.60
+langchain-core==0.3.28
+langchain-aws==0.2.10
+boto3==1.35.90

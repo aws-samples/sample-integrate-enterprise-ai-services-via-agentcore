@@ -1,0 +1,137 @@
+openapi: 3.0.3
+info:
+  title: Jira Cloud REST API (subset)
+  version: "3"
+  description: >
+    A minimal subset of the Jira Cloud Platform REST API v3, used as the schema
+    for the AgentCore Gateway HTTP passthrough target. Only the operations the
+    demo exercises are included: search issues, get an issue, and create an
+    issue. Authentication is HTTP Basic (email + API token), supplied by the
+    gateway's API-key credential provider.
+servers:
+  - url: https://your-domain.atlassian.net/rest/api/3
+    description: Replace with your Atlassian site base URL.
+security:
+  - basicAuth: []
+paths:
+  /search:
+    get:
+      operationId: searchIssues
+      summary: Search issues using JQL
+      parameters:
+        - name: jql
+          in: query
+          required: true
+          description: JQL query string, e.g. "project = DEMO ORDER BY created DESC".
+          schema:
+            type: string
+        - name: maxResults
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 20
+      responses:
+        "200":
+          description: Matching issues
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SearchResults"
+  /issue/{issueIdOrKey}:
+    get:
+      operationId: getIssue
+      summary: Get a single issue by id or key
+      parameters:
+        - name: issueIdOrKey
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The issue
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Issue"
+  /issue:
+    post:
+      operationId: createIssue
+      summary: Create an issue
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateIssueRequest"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreatedIssue"
+components:
+  securitySchemes:
+    basicAuth:
+      type: http
+      scheme: basic
+  schemas:
+    SearchResults:
+      type: object
+      properties:
+        total:
+          type: integer
+        issues:
+          type: array
+          items:
+            $ref: "#/components/schemas/Issue"
+    Issue:
+      type: object
+      properties:
+        id:
+          type: string
+        key:
+          type: string
+        fields:
+          type: object
+          properties:
+            summary:
+              type: string
+            status:
+              type: object
+              properties:
+                name:
+                  type: string
+    CreateIssueRequest:
+      type: object
+      required: [fields]
+      properties:
+        fields:
+          type: object
+          required: [project, summary, issuetype]
+          properties:
+            project:
+              type: object
+              properties:
+                key:
+                  type: string
+            summary:
+              type: string
+            description:
+              type: string
+            issuetype:
+              type: object
+              properties:
+                name:
+                  type: string
+    CreatedIssue:
+      type: object
+      properties:
+        id:
+          type: string
+        key:
+          type: string
+        self:
+          type: string

@@ -1,0 +1,46 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: langgraph-agent
+  namespace: ${K8S_NAMESPACE}
+  labels:
+    app: langgraph-agent
+spec:
+  type: ClusterIP
+  selector:
+    app: langgraph-agent
+  ports:
+    - port: 80
+      targetPort: 8080
+      protocol: TCP
+---
+# Dedicated internet-facing ALB for this service. One Ingress per service keeps
+# each gateway target endpoint a clean base URL (no path rewriting).
+#
+# TLS: AgentCore Gateway targets require https:// endpoints. When
+# ACM_CERTIFICATE_ARN is set in config.env, render-k8s.sh injects the HTTPS
+# listener + certificate annotation below. Without a cert the ALB serves HTTP
+# only (usable for local curl tests, but NOT connectable as a gateway target).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: langgraph-agent
+  namespace: ${K8S_NAMESPACE}
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/healthcheck-path: /api/v1/health
+    alb.ingress.kubernetes.io/listen-ports: '${ALB_LISTEN_PORTS}'
+${ALB_CERT_ANNOTATION}
+spec:
+  ingressClassName: alb
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: langgraph-agent
+                port:
+                  number: 80

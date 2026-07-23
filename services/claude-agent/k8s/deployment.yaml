@@ -1,0 +1,60 @@
+# Placeholders (${...}) are substituted by scripts/render-k8s.sh at deploy time.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: claude-agent
+  namespace: ${K8S_NAMESPACE}
+  labels:
+    app: claude-agent
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: claude-agent
+  template:
+    metadata:
+      labels:
+        app: claude-agent
+    spec:
+      serviceAccountName: ${SERVICE_ACCOUNT_NAME}
+      containers:
+        - name: claude-agent
+          image: ${ECR_REGISTRY}/${ECR_REPO_CLAUDE}:${IMAGE_TAG}
+          ports:
+            - containerPort: 8080
+          env:
+            - name: AWS_REGION
+              value: "${AWS_REGION}"
+            - name: BEDROCK_MODEL_ID
+              value: "${BEDROCK_MODEL_ID}"
+            # Route the Claude Agent SDK's Claude Code subprocess to Amazon
+            # Bedrock and tell it which Bedrock model id to use.
+            - name: CLAUDE_CODE_USE_BEDROCK
+              value: "1"
+            - name: ANTHROPIC_MODEL
+              value: "${BEDROCK_MODEL_ID}"
+            - name: COGNITO_USER_POOL_ID
+              value: "${COGNITO_USER_POOL_ID}"
+            - name: COGNITO_APP_CLIENT_ID
+              value: "${COGNITO_RESOURCE_CLIENT_ID}"
+            - name: AUTH_DISABLED
+              value: "false"
+          readinessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: 8080
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1"
+              memory: "1Gi"

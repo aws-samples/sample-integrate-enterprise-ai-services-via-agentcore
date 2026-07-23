@@ -1,0 +1,7 @@
+mcp==1.12.0
+uvicorn[standard]==0.34.0
+starlette==1.3.1
+httpx==0.28.1
+python-jose[cryptography]==3.3.0
+boto3==1.35.90
+pydantic==2.10.4

@@ -1,0 +1,209 @@
+openapi: 3.0.3
+info:
+  title: Claude Agent Service
+  version: 1.0.0
+  description: >
+    Customer-service agent exposed as a standard RESTful API. The agent is
+    backed by the Anthropic Claude Agent SDK running against Amazon Bedrock and
+    can look up orders, create returns, and recommend products (all mock data).
+
+    AgentCore Gateway consumes this spec as an OpenAPI target and auto-generates
+    one MCP tool per operation (see operationId values). Outbound auth is
+    provided by the gateway's Cognito OAuth credential provider, matching the
+    inbound OAuth2 clientCredentials scheme declared below.
+
+servers:
+  # Base URL of the service's dedicated ALB. Rendered at deploy time.
+  - url: https://${CLAUDE_AGENT_HOST}
+    description: Public HTTPS endpoint (ALB Ingress)
+
+# All operations except /api/v1/health require a Cognito access token.
+security:
+  - cognitoClientCredentials: []
+
+paths:
+  /api/v1/health:
+    get:
+      operationId: getHealth
+      summary: Liveness probe
+      description: Unauthenticated health check used by Kubernetes and the ALB.
+      security: []
+      responses:
+        "200":
+          description: Service is healthy.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+
+  /api/v1/conversations:
+    post:
+      operationId: createConversation
+      summary: Create a conversation
+      description: Creates a new, empty conversation and returns its identifier.
+      responses:
+        "201":
+          description: Conversation created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConversationCreated"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/conversations/{conversation_id}:
+    get:
+      operationId: getConversation
+      summary: Get conversation history
+      description: Returns the ordered list of messages in a conversation.
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+      responses:
+        "200":
+          description: Conversation history.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConversationHistory"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      operationId: deleteConversation
+      summary: Delete a conversation
+      description: Permanently deletes a conversation and its messages.
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+      responses:
+        "204":
+          description: Conversation deleted.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/conversations/{conversation_id}/messages:
+    post:
+      operationId: sendMessage
+      summary: Send a message
+      description: >
+        Appends a user message to the conversation, runs the agent, then
+        appends and returns the assistant reply.
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MessageRequest"
+      responses:
+        "201":
+          description: Assistant reply.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Message"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+components:
+  securitySchemes:
+    cognitoClientCredentials:
+      type: oauth2
+      description: >
+        Cognito OAuth 2.0 Client Credentials grant. Present the issued access
+        token as `Authorization: Bearer <token>`.
+      flows:
+        clientCredentials:
+          tokenUrl: https://${COGNITO_DOMAIN}/oauth2/token
+          scopes: {}
+
+  parameters:
+    ConversationId:
+      name: conversation_id
+      in: path
+      required: true
+      description: Unique conversation identifier.
+      schema:
+        type: string
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid access token.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: The requested conversation does not exist.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+  schemas:
+    Health:
+      type: object
+      required: [status, service]
+      properties:
+        status:
+          type: string
+          example: ok
+        service:
+          type: string
+          example: claude-agent
+
+    ConversationCreated:
+      type: object
+      required: [conversation_id, created_at]
+      properties:
+        conversation_id:
+          type: string
+          format: uuid
+        created_at:
+          type: string
+          format: date-time
+
+    MessageRequest:
+      type: object
+      required: [content]
+      properties:
+        content:
+          type: string
+          description: User message for the agent.
+          example: Where is my order ORD-1001?
+
+    Message:
+      type: object
+      required: [message_id, role, content]
+      properties:
+        message_id:
+          type: string
+          format: uuid
+        role:
+          type: string
+          enum: [user, assistant]
+        content:
+          type: string
+
+    ConversationHistory:
+      type: object
+      required: [conversation_id, messages]
+      properties:
+        conversation_id:
+          type: string
+        messages:
+          type: array
+          items:
+            $ref: "#/components/schemas/Message"
+
+    Error:
+      type: object
+      required: [detail]
+      properties:
+        detail:
+          type: string
