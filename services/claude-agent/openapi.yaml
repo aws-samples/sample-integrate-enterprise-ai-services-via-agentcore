@@ -13,9 +13,10 @@ info:
     inbound OAuth2 clientCredentials scheme declared below.
 
 servers:
-  # Base URL of the service's dedicated ALB. Rendered at deploy time.
+  # Base URL of the service's API Gateway HTTP API (execute-api endpoint with an
+  # AWS-managed certificate). Rendered at deploy time from the created API.
   - url: https://${CLAUDE_AGENT_HOST}
-    description: Public HTTPS endpoint (ALB Ingress)
+    description: Public HTTPS endpoint (API Gateway HTTP API)
 
 # All operations except /api/v1/health require a Cognito access token.
 security:

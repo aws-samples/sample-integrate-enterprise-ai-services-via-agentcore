@@ -1,6 +1,11 @@
 fastapi==0.115.6
 uvicorn[standard]==0.34.0
-pydantic==2.10.4
+# claude-agent-sdk requires mcp>=1.23.0, and mcp>=1.23 requires pydantic>=2.11,
+# so pydantic must be 2.11+ (2.10.x conflicts). fastapi 0.115.6 supports it.
+pydantic==2.11.10
 httpx==0.28.1
 python-jose[cryptography]==3.3.0
+# Pin mcp explicitly so the resolver does not float between builds. Any 1.23+
+# release satisfies claude-agent-sdk (mcp<2.0.0,>=1.23.0).
+mcp==1.28.1
 claude-agent-sdk==0.2.126

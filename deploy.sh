@@ -2,15 +2,21 @@
 # =============================================================================
 # deploy.sh - one-click deployment of the AgentCore Gateway demo.
 #
-#   1. Deploy infrastructure (ECR + Cognito + EKS)          via CDK
-#   2. Build & push the 3 service container images          via Docker + ECR
-#   3. Deploy the services to EKS                            via kubectl
-#   4. Wait for ALB endpoints                               via kubectl
-#   5. Upload the Claude Agent OpenAPI spec to S3
-#   6. Create the AgentCore Gateway + 4 targets             via setup-gateway.py
+#   1. Deploy infrastructure (ECR + CodeBuild + Cognito + EKS + VPC Link) via CDK
+#   2. Build & push the 3 service container images            via AWS CodeBuild
+#   3. Deploy the services to EKS (internal ALBs)             via kubectl
+#   4. Wait for the internal ALBs                             via kubectl
+#   5. Front each service with an API Gateway HTTP API        via setup-apigateway.py
+#   6. Upload the OpenAPI specs (langgraph, claude, jira) to S3
+#   7. Create the AgentCore Gateway + 4 targets               via setup-gateway.py
 #
-# Prerequisites: aws cli v2, cdk, docker, kubectl, jq, envsubst, python venv.
-# Edit config.env before running. Safe to re-run (idempotent where possible).
+# TLS: each service is reached through its API Gateway execute-api endpoint
+# (AWS-managed certificate) - no custom domain or ACM certificate required.
+#
+# Prerequisites: aws cli v2, cdk, kubectl, jq, envsubst, zip, python venv.
+# NOTE: no local Docker needed - images build on AWS CodeBuild.
+# Copy config.example.env to config.env and edit it before running. Safe to
+# re-run (idempotent where possible).
 # =============================================================================
 set -euo pipefail
 
@@ -18,6 +24,11 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$HERE"
 
 # --- 0. load config + venv --------------------------------------------------
+if [[ ! -f ./config.env ]]; then
+  echo "config.env not found. Create it first:" >&2
+  echo "    cp config.example.env config.env   # then edit config.env" >&2
+  exit 1
+fi
 # shellcheck disable=SC1091
 source ./config.env
 PY="$HERE/venv/bin/python"
@@ -27,7 +38,7 @@ PIP="$HERE/venv/bin/pip"
 log() { printf '\n\033[1;34m==> %s\033[0m\n' "$*"; }
 die() { printf '\033[1;31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
 
-for bin in aws cdk docker kubectl jq envsubst; do
+for bin in aws cdk kubectl jq envsubst zip; do
   command -v "$bin" >/dev/null 2>&1 || die "'$bin' is required but not installed."
 done
 
@@ -75,6 +86,10 @@ export CLUSTER_NAME_OUT="$(out "$EKS_STACK" ClusterName)"
 export KUBECTL_ROLE_ARN="$(out "$EKS_STACK" KubectlRoleArn)"
 export K8S_NAMESPACE="$(out "$EKS_STACK" WorkloadNamespace)"
 export SERVICE_ACCOUNT_NAME="$(out "$EKS_STACK" WorkloadServiceAccount)"
+export VPC_LINK_ID="$(out "$EKS_STACK" VpcLinkId)"
+BUILD_STACK="${PROJECT_NAME}-build"
+export BUILD_PROJECT="$(out "$BUILD_STACK" BuildProjectName)"
+export BUILD_SOURCE_BUCKET="$(out "$BUILD_STACK" BuildSourceBucket)"
 
 [[ -n "$COGNITO_USER_POOL_ID" ]] || die "Could not read Cognito outputs."
 
@@ -87,20 +102,52 @@ COGNITO_GATEWAY_CLIENT_SECRET="$(aws cognito-idp describe-user-pool-client \
   --region "$AWS_REGION" --query 'UserPoolClient.ClientSecret' --output text)"
 export COGNITO_SERVICE_CLIENT_SECRET COGNITO_GATEWAY_CLIENT_SECRET
 
-# --- 3. build & push images -------------------------------------------------
-log "Logging in to ECR"
-aws ecr get-login-password --region "$AWS_REGION" \
-  | docker login --username AWS --password-stdin "$ECR_REGISTRY"
+# --- 3. build & push images (on AWS CodeBuild, no local Docker) -------------
+# Each service directory is zipped, uploaded to the CodeBuild source bucket, and
+# built on CodeBuild (native linux/amd64). This removes any local Docker / cross
+# architecture emulation requirement. Builds run sequentially and the script
+# waits for each to reach SUCCEEDED.
+[[ -n "$BUILD_PROJECT" && -n "$BUILD_SOURCE_BUCKET" ]] \
+  || die "Could not read CodeBuild outputs (BuildProjectName / BuildSourceBucket)."
 
-build_push() {
-  local dir="$1" repo="$2"
-  log "Building ${repo}"
-  docker build --platform linux/amd64 -t "${ECR_REGISTRY}/${repo}:${IMAGE_TAG}" "services/${dir}"
-  docker push "${ECR_REGISTRY}/${repo}:${IMAGE_TAG}"
+build_on_codebuild() {
+  local dir="$1" repo="$2" key="sources/${dir}.zip" zip
+  log "Building ${repo} on CodeBuild"
+  # zip refuses to append to the empty file mktemp leaves behind, so use a plain
+  # path and remove any stale copy first. Exclude caches / VCS from the context.
+  zip="${TMPDIR:-/tmp}/acgw-build-${dir}.zip"
+  rm -f "$zip"
+  # Zip the service dir contents at the archive root so the Dockerfile is at ./.
+  ( cd "services/${dir}" && zip -qr "$zip" . -x '*/__pycache__/*' '__pycache__/*' '*.pyc' '.git/*' )
+  aws s3 cp "$zip" "s3://${BUILD_SOURCE_BUCKET}/${key}" >/dev/null
+  rm -f "$zip"
+
+  local build_id
+  build_id="$(aws codebuild start-build \
+    --project-name "$BUILD_PROJECT" \
+    --region "$AWS_REGION" \
+    --source-location-override "${BUILD_SOURCE_BUCKET}/${key}" \
+    --source-type-override S3 \
+    --environment-variables-override \
+      "name=REPO,value=${repo},type=PLAINTEXT" \
+      "name=IMAGE_TAG,value=${IMAGE_TAG},type=PLAINTEXT" \
+    --query 'build.id' --output text)"
+  echo "  build id: ${build_id}"
+
+  # Poll until the build finishes.
+  local status="IN_PROGRESS"
+  while [[ "$status" == "IN_PROGRESS" ]]; do
+    sleep 15
+    status="$(aws codebuild batch-get-builds --ids "$build_id" --region "$AWS_REGION" \
+      --query 'builds[0].buildStatus' --output text)"
+    echo "  ${repo}: ${status}"
+  done
+  [[ "$status" == "SUCCEEDED" ]] \
+    || die "CodeBuild for ${repo} ended with status ${status}. See the CodeBuild console logs for build ${build_id}."
 }
-build_push langgraph-agent "$ECR_REPO_LANGGRAPH"
-build_push claude-agent    "$ECR_REPO_CLAUDE"
-build_push mcp-server       "$ECR_REPO_MCP"
+build_on_codebuild langgraph-agent "$ECR_REPO_LANGGRAPH"
+build_on_codebuild claude-agent    "$ECR_REPO_CLAUDE"
+build_on_codebuild mcp-server      "$ECR_REPO_MCP"
 
 # --- 4. deploy to EKS -------------------------------------------------------
 log "Updating kubeconfig"
@@ -119,7 +166,10 @@ for svc in langgraph-agent claude-agent mcp-server; do
   kubectl -n "$K8S_NAMESPACE" rollout status "deploy/${svc}" --timeout=300s
 done
 
-# --- 5. wait for ALB endpoints ---------------------------------------------
+# --- 5. wait for the internal ALBs, then front them with API Gateway --------
+# The internal ALBs carry no public hostname; instead we wait for each Ingress's
+# LB to report a hostname (meaning the LB + listener exist) and then let
+# setup-apigateway.py resolve the HTTP:80 listener ARN by ALB name.
 wait_alb() {
   local ing="$1" host="" i=0
   while [[ -z "$host" && $i -lt 40 ]]; do
@@ -129,43 +179,68 @@ wait_alb() {
   done
   echo "$host"
 }
-log "Waiting for ALB provisioning (a few minutes)"
-LANGGRAPH_ALB="$(wait_alb langgraph-agent)"
-CLAUDE_ALB="$(wait_alb claude-agent)"
-MCP_ALB="$(wait_alb mcp-server)"
-[[ -n "$LANGGRAPH_ALB" && -n "$CLAUDE_ALB" && -n "$MCP_ALB" ]] \
-  || die "ALB endpoints did not become ready."
+log "Waiting for internal ALB provisioning (a few minutes)"
+for svc in langgraph-agent claude-agent mcp-server; do
+  [[ -n "$(wait_alb "$svc")" ]] || die "Internal ALB for '$svc' did not become ready."
+done
 
-# Gateway targets require https:// endpoints. Prefer BASE_DOMAIN (with your ACM
-# cert + DNS) when provided; otherwise fall back to the raw ALB hostname over
-# https (only works if ACM_CERTIFICATE_ARN attached an HTTPS listener).
-scheme="https"
-if [[ -n "${BASE_DOMAIN}" ]]; then
-  export LANGGRAPH_ENDPOINT="${scheme}://langgraph.${BASE_DOMAIN}"
-  export CLAUDE_ENDPOINT="${scheme}://claude.${BASE_DOMAIN}"
-  export MCP_ENDPOINT="${scheme}://mcp.${BASE_DOMAIN}/mcp"
-else
-  export LANGGRAPH_ENDPOINT="${scheme}://${LANGGRAPH_ALB}"
-  export CLAUDE_ENDPOINT="${scheme}://${CLAUDE_ALB}"
-  export MCP_ENDPOINT="${scheme}://${MCP_ALB}/mcp"
-fi
+log "Creating API Gateway HTTP APIs (execute-api HTTPS front doors)"
+$PY gateway/setup-apigateway.py
 
-# --- 6. upload Claude OpenAPI spec to S3 -----------------------------------
-log "Uploading Claude Agent OpenAPI spec to S3"
+# Read the resolved execute-api endpoints. These are the https:// URLs the
+# AgentCore Gateway targets connect to (AWS-managed cert, no custom domain).
+apigw() { jq -r --arg s "$1" '.[$s].endpoint // empty' gateway/generated-apigateway.json; }
+export LANGGRAPH_ENDPOINT="$(apigw langgraph-agent)"
+export CLAUDE_ENDPOINT="$(apigw claude-agent)"
+export MCP_ENDPOINT="$(apigw mcp-server)"
+[[ -n "$LANGGRAPH_ENDPOINT" && -n "$CLAUDE_ENDPOINT" && -n "$MCP_ENDPOINT" ]] \
+  || die "API Gateway endpoints were not written."
+
+# --- 6. upload OpenAPI specs to S3 -----------------------------------------
+# An aggregating MCP gateway exposes each target as MCP tools, so every target
+# needs a tool schema. Services 1 and 2 ship OpenAPI specs; the gateway turns
+# each operation into an MCP tool. Jira (Service 4) ships a spec too when
+# configured. The specs use ${..._HOST} (host only, no scheme) and
+# ${COGNITO_DOMAIN} placeholders, substituted here with resolved values.
+log "Uploading OpenAPI specs to S3"
 SPEC_BUCKET="${PROJECT_NAME}-gateway-specs-${AWS_ACCOUNT_ID}"
 aws s3api head-bucket --bucket "$SPEC_BUCKET" 2>/dev/null || \
   aws s3api create-bucket --bucket "$SPEC_BUCKET" --region "$AWS_REGION" \
     --create-bucket-configuration "LocationConstraint=${AWS_REGION}" >/dev/null
-# Inject the resolved host + Cognito domain into the spec before upload.
-# The spec uses ${CLAUDE_AGENT_HOST} (host only, no scheme) and ${COGNITO_DOMAIN}.
-CLAUDE_HOST="${CLAUDE_ENDPOINT#https://}"; CLAUDE_HOST="${CLAUDE_HOST%%/*}"
+
 COGNITO_DOMAIN_HOST="${COGNITO_TOKEN_URL#https://}"; COGNITO_DOMAIN_HOST="${COGNITO_DOMAIN_HOST%%/*}"
-tmp_spec="$(mktemp --suffix=.yaml)"
-sed "s|\${CLAUDE_AGENT_HOST}|${CLAUDE_HOST}|g; s|\${COGNITO_DOMAIN}|${COGNITO_DOMAIN_HOST}|g" \
-  services/claude-agent/openapi.yaml > "$tmp_spec"
-aws s3 cp "$tmp_spec" "s3://${SPEC_BUCKET}/claude-agent/openapi.yaml" >/dev/null
-rm -f "$tmp_spec"
-export CLAUDE_OPENAPI_S3_URI="s3://${SPEC_BUCKET}/claude-agent/openapi.yaml"
+
+# upload_spec <src-yaml> <s3-key> <host-placeholder> <host-value>
+upload_spec() {
+  local src="$1" key="$2" ph="$3" host="$4" tmp
+  tmp="$(mktemp --suffix=.yaml)"
+  sed "s|\${${ph}}|${host}|g; s|\${COGNITO_DOMAIN}|${COGNITO_DOMAIN_HOST}|g" \
+    "$src" > "$tmp"
+  aws s3 cp "$tmp" "s3://${SPEC_BUCKET}/${key}" >/dev/null
+  rm -f "$tmp"
+  echo "s3://${SPEC_BUCKET}/${key}"
+}
+
+LANGGRAPH_HOST="${LANGGRAPH_ENDPOINT#https://}"; LANGGRAPH_HOST="${LANGGRAPH_HOST%%/*}"
+CLAUDE_HOST="${CLAUDE_ENDPOINT#https://}"; CLAUDE_HOST="${CLAUDE_HOST%%/*}"
+export LANGGRAPH_OPENAPI_S3_URI="$(upload_spec services/langgraph-agent/openapi.yaml \
+  langgraph-agent/openapi.yaml LANGGRAPH_AGENT_HOST "$LANGGRAPH_HOST")"
+export CLAUDE_OPENAPI_S3_URI="$(upload_spec services/claude-agent/openapi.yaml \
+  claude-agent/openapi.yaml CLAUDE_AGENT_HOST "$CLAUDE_HOST")"
+
+# Jira (Service 4) is external SaaS; only wire it when JIRA_BASE_URL is set. Its
+# spec server URL is the Jira site itself (not an execute-api endpoint).
+if [[ -n "${JIRA_BASE_URL}" ]]; then
+  JIRA_HOST="${JIRA_BASE_URL#https://}"; JIRA_HOST="${JIRA_HOST%%/*}"
+  # The Jira subset hard-codes its server URL; substitute the site host in place
+  # of the your-domain.atlassian.net placeholder line.
+  tmp_jira="$(mktemp --suffix=.yaml)"
+  sed "s|https://your-domain.atlassian.net|${JIRA_BASE_URL%/}|g" \
+    services/jira-integration/jira-openapi-subset.yaml > "$tmp_jira"
+  aws s3 cp "$tmp_jira" "s3://${SPEC_BUCKET}/jira-cloud/openapi.yaml" >/dev/null
+  rm -f "$tmp_jira"
+  export JIRA_OPENAPI_S3_URI="s3://${SPEC_BUCKET}/jira-cloud/openapi.yaml"
+fi
 
 # --- 7. create the gateway + targets ---------------------------------------
 export GATEWAY_ROLE_ARN="$(out "$COGNITO_STACK" GatewayRoleArn)"

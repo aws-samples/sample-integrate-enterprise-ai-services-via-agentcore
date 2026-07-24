@@ -40,12 +40,18 @@ def _token() -> str:
 
 
 def _mcp_call(endpoint: str, token: str, method: str, params: dict | None, rpc_id: int) -> dict:
+    # The gateway advertises MCP protocol 2025-06-18 only. Pin it on every
+    # request via the MCP-Protocol-Version header, otherwise post-initialize
+    # calls default to 2025-03-26 and the gateway rejects them with a 400
+    # (-32022 "Unsupported protocol version").
+    mcp_version = os.environ.get("GATEWAY_MCP_VERSION", "2025-06-18")
     resp = httpx.post(
         endpoint,
         headers={
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
             "Accept": "application/json, text/event-stream",
+            "MCP-Protocol-Version": mcp_version,
         },
         json={"jsonrpc": "2.0", "id": rpc_id, "method": method, "params": params or {}},
         timeout=30.0,

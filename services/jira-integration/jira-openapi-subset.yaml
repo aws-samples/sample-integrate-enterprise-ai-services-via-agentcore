@@ -14,15 +14,22 @@ servers:
 security:
   - basicAuth: []
 paths:
-  /search:
+  /search/jql:
     get:
       operationId: searchIssues
       summary: Search issues using JQL
+      description: >
+        Uses the current Jira Cloud search endpoint (/rest/api/3/search/jql).
+        The legacy /rest/api/3/search was removed by Atlassian (returns 410).
+        Note: unbounded JQL is rejected - include a restriction such as a
+        project or a date bound (e.g. "created >= -365d ORDER BY created DESC").
       parameters:
         - name: jql
           in: query
           required: true
-          description: JQL query string, e.g. "project = DEMO ORDER BY created DESC".
+          description: >
+            Bounded JQL query string, e.g.
+            "project = DEMO ORDER BY created DESC".
           schema:
             type: string
         - name: maxResults
@@ -31,6 +38,13 @@ paths:
           schema:
             type: integer
             default: 20
+        - name: fields
+          in: query
+          required: false
+          description: Comma separated list of fields to return, e.g. "summary,status".
+          schema:
+            type: string
+            default: "summary,status"
       responses:
         "200":
           description: Matching issues
@@ -81,12 +95,16 @@ components:
     SearchResults:
       type: object
       properties:
-        total:
-          type: integer
         issues:
           type: array
           items:
             $ref: "#/components/schemas/Issue"
+        nextPageToken:
+          type: string
+          description: Token to fetch the next page, absent on the last page.
+        isLast:
+          type: boolean
+          description: True when there are no more pages.
     Issue:
       type: object
       properties:
