@@ -23,7 +23,7 @@ _SYSTEM_PROMPT = (
 def _build_agent():
     region = os.environ.get("AWS_REGION", "ap-northeast-1")
     model_id = os.environ.get(
-        "BEDROCK_MODEL_ID", "apac.anthropic.claude-sonnet-4-5-20250929-v1:0"
+        "BEDROCK_MODEL_ID", "jp.anthropic.claude-sonnet-4-5-20250929-v1:0"
     )
     llm = ChatBedrockConverse(
         model=model_id,

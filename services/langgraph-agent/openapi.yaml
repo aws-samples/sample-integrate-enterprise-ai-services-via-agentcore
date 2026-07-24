@@ -1,0 +1,186 @@
+openapi: 3.0.3
+info:
+  title: LangGraph Agent Service
+  version: 1.0.0
+  description: >
+    Enterprise ReAct agent (calculator, weather, knowledge, time tools) exposed
+    via a bespoke REST API and backed by the LangGraph runtime on Amazon Bedrock.
+
+    Although the service itself uses a non-standard REST shape, AgentCore Gateway
+    aggregating MCP gateways require every target to expose a tool schema. This
+    OpenAPI document is that schema: the gateway converts each operation below
+    into one MCP tool (named by its operationId). Outbound auth is provided by
+    the gateway's Cognito OAuth credential provider, matching the inbound OAuth2
+    clientCredentials scheme declared below.
+
+servers:
+  # Base URL of the service's API Gateway HTTP API (execute-api endpoint with an
+  # AWS-managed certificate). Rendered at deploy time from the created API.
+  - url: https://${LANGGRAPH_AGENT_HOST}
+    description: Public HTTPS endpoint (API Gateway HTTP API)
+
+# All operations except /api/v1/health require a Cognito access token.
+security:
+  - cognitoClientCredentials: []
+
+paths:
+  /api/v1/health:
+    get:
+      operationId: getHealth
+      summary: Liveness probe
+      description: Unauthenticated health check used by Kubernetes and the ALB.
+      security: []
+      responses:
+        "200":
+          description: Service is healthy.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+
+  /api/v1/chat:
+    post:
+      operationId: chat
+      summary: Single-turn conversation with the agent
+      description: >
+        Sends one user message to the ReAct agent and returns its reply. The
+        agent may internally call its calculator, weather, knowledge, or time
+        tools before responding.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatRequest"
+      responses:
+        "200":
+          description: The agent's reply.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/tasks:
+    post:
+      operationId: createTask
+      summary: Create an asynchronous task
+      description: >
+        Submits a prompt to be processed asynchronously and returns a task id to
+        poll. Use getTask to retrieve the result once the status is completed.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TaskRequest"
+      responses:
+        "202":
+          description: Task accepted for processing.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TaskCreated"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/tasks/{task_id}:
+    get:
+      operationId: getTask
+      summary: Poll asynchronous task status
+      description: Returns the current status and, once finished, the result of a task.
+      parameters:
+        - name: task_id
+          in: path
+          required: true
+          description: The task id returned by createTask.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Current task status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TaskStatus"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: Task not found.
+
+components:
+  securitySchemes:
+    cognitoClientCredentials:
+      type: oauth2
+      description: >
+        Cognito OAuth 2.0 client_credentials grant. The gateway's Cognito OAuth
+        credential provider supplies the outbound access token.
+      flows:
+        clientCredentials:
+          tokenUrl: https://${COGNITO_DOMAIN}/oauth2/token
+          scopes: {}
+  responses:
+    Unauthorized:
+      description: Missing or invalid access token.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+  schemas:
+    Health:
+      type: object
+      properties:
+        status:
+          type: string
+          example: ok
+        service:
+          type: string
+          example: langgraph-agent
+    ChatRequest:
+      type: object
+      required: [message]
+      properties:
+        message:
+          type: string
+          description: User message for the agent.
+    ChatResponse:
+      type: object
+      properties:
+        reply:
+          type: string
+          description: The agent's reply.
+    TaskRequest:
+      type: object
+      required: [message]
+      properties:
+        message:
+          type: string
+          description: Prompt to process asynchronously.
+    TaskCreated:
+      type: object
+      properties:
+        task_id:
+          type: string
+        status:
+          type: string
+          enum: [pending, running, completed, failed]
+    TaskStatus:
+      type: object
+      properties:
+        task_id:
+          type: string
+        status:
+          type: string
+          enum: [pending, running, completed, failed]
+        result:
+          type: string
+          nullable: true
+        error:
+          type: string
+          nullable: true
+    Error:
+      type: object
+      properties:
+        detail:
+          type: string

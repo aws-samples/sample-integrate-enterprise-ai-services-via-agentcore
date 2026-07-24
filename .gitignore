@@ -30,6 +30,7 @@ aws-exports.js
 deploy-outputs.json
 deploy-outputs.env
 gateway/generated-*.json
+cdk-outputs.json
 services/jira-integration/config.json
 kubeconfig*
 
@@ -38,3 +39,6 @@ kubeconfig*
 *.log
 .idea/
 .vscode/
+
+# Local deployment config - copied from config.example.env, may hold account-specific values.
+config.env

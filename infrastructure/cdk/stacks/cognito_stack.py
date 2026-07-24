@@ -114,12 +114,26 @@ class CognitoStack(cdk.Stack):
                 resources=["*"],
             )
         )
+        # Secret access. Two distinct sets of secrets are involved:
+        #   1. The Jira API token this demo stores under "<project>/*".
+        #   2. The credential-provider secrets that AgentCore Identity manages on
+        #      the gateway's behalf. When you create an OAuth2 / API-key
+        #      credential provider, Identity stores the client secret in a
+        #      Secrets Manager secret named
+        #      "bedrock-agentcore-identity!default/oauth2/<name>-<suffix>" (and
+        #      ".../apikey/..."). The gateway execution role must be allowed to
+        #      read these, or every outbound tool call fails with
+        #      "Failed to fetch outbound oauth token ... not authorized to
+        #      perform: secretsmanager:GetSecretValue".
+        region = cdk.Stack.of(self).region
+        account = cdk.Stack.of(self).account
         gateway_role.add_to_policy(
             iam.PolicyStatement(
                 actions=["secretsmanager:GetSecretValue"],
                 resources=[
-                    f"arn:aws:secretsmanager:{cdk.Stack.of(self).region}:"
-                    f"{cdk.Stack.of(self).account}:secret:{project}/*"
+                    f"arn:aws:secretsmanager:{region}:{account}:secret:{project}/*",
+                    f"arn:aws:secretsmanager:{region}:{account}:"
+                    "secret:bedrock-agentcore-identity!default/*",
                 ],
             )
         )

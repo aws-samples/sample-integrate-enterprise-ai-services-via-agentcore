@@ -2,10 +2,11 @@
 # =============================================================================
 # destroy.sh - one-click teardown, reverse order of deploy.sh.
 #
-#   1. Delete AgentCore Gateway targets + gateway + credential providers
-#   2. Delete k8s Ingresses (releases the ALBs) and the services
-#   3. Empty + delete the OpenAPI spec S3 bucket
-#   4. cdk destroy --all (EKS, Cognito, ECR)
+#   1.  Delete AgentCore Gateway targets + gateway + credential providers
+#   1b. Delete the per-service API Gateway HTTP APIs (before the VPC Link goes)
+#   2.  Delete k8s Ingresses (releases the ALBs) and the services
+#   3.  Empty + delete the OpenAPI spec S3 bucket
+#   4.  cdk destroy --all (EKS + VPC Link, Cognito, ECR)
 #
 # Best-effort: individual failures are logged but do not abort the rest, so a
 # partially deployed stack can still be cleaned up.
@@ -14,6 +15,10 @@ set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$HERE"
+if [[ ! -f ./config.env ]]; then
+  echo "config.env not found (cp config.example.env config.env). Nothing to tear down." >&2
+  exit 1
+fi
 # shellcheck disable=SC1091
 source ./config.env
 [[ -f "$DEPLOY_OUTPUTS" ]] && source "./$DEPLOY_OUTPUTS"
@@ -29,6 +34,11 @@ fi
 # --- 1. tear down the gateway ----------------------------------------------
 log "Deleting AgentCore Gateway resources"
 $PY gateway/teardown-gateway.py || warn "Gateway teardown reported errors (continuing)."
+
+# --- 1b. tear down the API Gateway HTTP APIs -------------------------------
+# Must happen before cdk destroy removes the VPC Link they attach to.
+log "Deleting API Gateway HTTP APIs"
+$PY gateway/teardown-apigateway.py || warn "API Gateway teardown reported errors (continuing)."
 
 # --- 2. delete k8s resources (frees the ALBs before EKS is destroyed) ------
 if command -v kubectl >/dev/null 2>&1 && [[ -n "${CLUSTER_NAME:-}" ]]; then
@@ -59,6 +69,7 @@ export CDK_DEFAULT_REGION="$AWS_REGION"
   || warn "cdk destroy reported errors - check the CloudFormation console."
 
 log "Cleaning up generated files"
-rm -f cdk-outputs.json "$DEPLOY_OUTPUTS" gateway/generated-gateway.json
+rm -f cdk-outputs.json "$DEPLOY_OUTPUTS" \
+  gateway/generated-gateway.json gateway/generated-apigateway.json
 
 log "Teardown complete."

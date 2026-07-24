@@ -44,8 +44,8 @@ credential_providers:
 
 targets:
   - name: langgraph-agent
-    kind: http_passthrough            # HTTP Passthrough, protocolType CUSTOM
-    endpoint: "${LANGGRAPH_ENDPOINT}"
+    kind: openapi                     # OpenAPI -> MCP, schema uploaded to S3
+    openapi_s3_uri: "${LANGGRAPH_OPENAPI_S3_URI}"
     outbound: cognito_oauth
 
   - name: claude-agent
@@ -59,8 +59,8 @@ targets:
     outbound: cognito_oauth
 
   - name: jira-cloud
-    kind: http_passthrough            # HTTP Passthrough, protocolType CUSTOM
-    endpoint: "${JIRA_BASE_URL}"
+    kind: openapi                     # OpenAPI -> MCP, schema uploaded to S3
+    openapi_s3_uri: "${JIRA_OPENAPI_S3_URI}"
     outbound: jira_api_key
     # Jira Basic auth: base64(email:api_token) in the Authorization header.
     api_key_location: HEADER

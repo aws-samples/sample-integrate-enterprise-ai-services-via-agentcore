@@ -7,10 +7,16 @@ drives the bedrock-agentcore-control API to build:
   Gateway (MCP protocol, CUSTOM_JWT inbound auth via Cognito)
     +-- OAuth2 credential provider (Cognito, outbound to Services 1/2/3)
     +-- API-key credential provider (Jira, outbound to Service 4)
-    +-- Target 1: langgraph-agent  -> HTTP passthrough (CUSTOM)
+    +-- Target 1: langgraph-agent  -> OpenAPI -> MCP (schema from S3)
     +-- Target 2: claude-agent     -> OpenAPI -> MCP (schema from S3)
     +-- Target 3: mcp-server       -> native MCP server
-    +-- Target 4: jira-cloud       -> HTTP passthrough (CUSTOM), API key
+    +-- Target 4: jira-cloud       -> OpenAPI -> MCP (schema from S3), API key
+
+Note: an aggregating MCP gateway (protocolType=MCP) exposes every target as MCP
+tools and therefore requires each target to carry a tool schema. HTTP
+passthrough targets have no schema and attach only to a no-protocol gateway, so
+Services 1 and 4 are wired as OpenAPI targets here (their operationIds become
+the MCP tool names).
 
 The script is idempotent: existing gateway / providers / targets with the same
 names are reused instead of recreated. It prints the gateway MCP endpoint URL at
@@ -127,10 +133,23 @@ def get_or_create_apikey_provider(client, cfg: dict) -> str | None:
 
 
 def _read_jira_token() -> str:
-    """Read the Jira API token from Secrets Manager (never from config files)."""
+    """Return the Jira API token.
+
+    Resolution order:
+      1. JIRA_API_TOKEN in the environment (set in the git-ignored config.env) -
+         convenient for a quick demo.
+      2. AWS Secrets Manager at JIRA_API_TOKEN_SECRET_NAME - the recommended
+         path (nothing sensitive on disk).
+    """
+    inline = os.environ.get("JIRA_API_TOKEN", "").strip()
+    if inline:
+        log("Using Jira API token from JIRA_API_TOKEN (config.env)")
+        return inline
+
     secret_name = require(
         os.environ.get("JIRA_API_TOKEN_SECRET_NAME"), "JIRA_API_TOKEN_SECRET_NAME"
     )
+    log(f"Reading Jira API token from Secrets Manager ({secret_name})")
     sm = boto3.client("secretsmanager", region_name=REGION)
     resp = sm.get_secret_value(SecretId=secret_name)
     raw = resp.get("SecretString", "")
@@ -278,8 +297,12 @@ def create_targets(client, gateway_id: str, cfg: dict, oauth_arn: str, apikey_ar
     for target in cfg["targets"]:
         name = target["name"]
 
-        # Skip the Jira target entirely if it has no endpoint / credential.
-        if target["outbound"] == "jira_api_key" and (apikey_arn is None or not target.get("endpoint")):
+        # Skip the Jira target entirely if it has no schema / credential. Jira is
+        # now an OpenAPI target, so its presence is gated on the OpenAPI S3 URI
+        # (written by deploy.sh only when JIRA_BASE_URL is configured).
+        if target["outbound"] == "jira_api_key" and (
+            apikey_arn is None or not target.get("openapi_s3_uri")
+        ):
             log(f"Skipping target '{name}' (Jira not configured)")
             continue
 

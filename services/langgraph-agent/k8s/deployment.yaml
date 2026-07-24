@@ -31,8 +31,11 @@ spec:
               value: "${COGNITO_USER_POOL_ID}"
             - name: COGNITO_APP_CLIENT_ID
               value: "${COGNITO_RESOURCE_CLIENT_ID}"
+            # JWT validation runs at the API Gateway layer; the service trusts
+            # requests arriving via the VPC Link. Set AUTH_DISABLED=false in
+            # config.env to also enforce Cognito JWT in-pod (defense in depth).
             - name: AUTH_DISABLED
-              value: "false"
+              value: "${AUTH_DISABLED}"
           readinessProbe:
             httpGet:
               path: /api/v1/health

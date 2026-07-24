@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """CDK app entry point for the AgentCore Gateway demo infrastructure.
 
-Three stacks, deployed together via `cdk deploy --all`:
+Four stacks, deployed together via `cdk deploy --all`:
 
   1. EcrStack     - one ECR repository per container service.
-  2. CognitoStack - User Pool + resource server + app clients for OAuth 2.0
+  2. BuildStack   - a CodeBuild project + source bucket that build/push the
+                    service images on AWS (native amd64), so deploy.sh needs no
+                    local Docker.
+  3. CognitoStack - User Pool + resource server + app clients for OAuth 2.0
                     (both inbound service auth and outbound gateway auth).
-  3. EksStack     - EKS cluster, managed node group, and the AWS Load Balancer
+  4. EksStack     - EKS cluster, managed node group, and the AWS Load Balancer
                     Controller (for ALB Ingress). Grants the workload service
                     account permission to invoke Bedrock.
 
@@ -18,6 +21,7 @@ import os
 
 import aws_cdk as cdk
 
+from stacks.build_stack import BuildStack
 from stacks.cognito_stack import CognitoStack
 from stacks.ecr_stack import EcrStack
 from stacks.eks_stack import EksStack
@@ -38,15 +42,25 @@ env = _env()
 
 project = _cfg("PROJECT_NAME", "agentcore-gw-demo")
 
+repo_names = [
+    _cfg("ECR_REPO_LANGGRAPH", f"{project}/langgraph-agent"),
+    _cfg("ECR_REPO_CLAUDE", f"{project}/claude-agent"),
+    _cfg("ECR_REPO_MCP", f"{project}/mcp-server"),
+]
+
 ecr = EcrStack(
     app,
     f"{project}-ecr",
     env=env,
-    repo_names=[
-        _cfg("ECR_REPO_LANGGRAPH", f"{project}/langgraph-agent"),
-        _cfg("ECR_REPO_CLAUDE", f"{project}/claude-agent"),
-        _cfg("ECR_REPO_MCP", f"{project}/mcp-server"),
-    ],
+    repo_names=repo_names,
+)
+
+BuildStack(
+    app,
+    f"{project}-build",
+    env=env,
+    project=project,
+    repo_names=repo_names,
 )
 
 cognito = CognitoStack(

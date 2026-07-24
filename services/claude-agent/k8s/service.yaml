@@ -14,24 +14,25 @@ spec:
       targetPort: 8080
       protocol: TCP
 ---
-# Dedicated internet-facing ALB for this service. One Ingress per service keeps
-# each gateway target endpoint a clean base URL (no path rewriting).
+# Dedicated INTERNAL ALB for this service. One Ingress per service keeps each
+# gateway target endpoint a clean base URL (no path rewriting).
 #
-# TLS: AgentCore Gateway targets require https:// endpoints. When
-# ACM_CERTIFICATE_ARN is set in config.env, render-k8s.sh injects the HTTPS
-# listener + certificate annotation below. Without a cert the ALB serves HTTP
-# only (usable for local curl tests, but NOT connectable as a gateway target).
+# TLS is handled one layer up by Amazon API Gateway (execute-api endpoint with
+# an AWS-managed certificate). API Gateway reaches this ALB privately over a
+# VPC Link, so the ALB is internal and serves plain HTTP(80) - no ACM cert and
+# no public exposure. The fixed load-balancer-name lets setup-apigateway.py
+# resolve this ALB's HTTP listener ARN at deploy time.
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: claude-agent
   namespace: ${K8S_NAMESPACE}
   annotations:
-    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/scheme: internal
     alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/load-balancer-name: ${PROJECT_SHORT}-claude
     alb.ingress.kubernetes.io/healthcheck-path: /api/v1/health
-    alb.ingress.kubernetes.io/listen-ports: '${ALB_LISTEN_PORTS}'
-${ALB_CERT_ANNOTATION}
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80}]'
 spec:
   ingressClassName: alb
   rules:
