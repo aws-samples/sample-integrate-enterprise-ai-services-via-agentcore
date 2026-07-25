@@ -50,7 +50,10 @@
 3. **MCP Server** (`services/mcp-server`)——企业知识库**原生 MCP 服务**
    (Streamable HTTP,`/mcp`),4 个工具,作为 **MCP Server** Target。
 4. **Jira Cloud** (`services/jira-integration`)——外部 SaaS,作为 **OpenAPI → MCP**
-   Target,出站用 **API-key**(Basic 认证)。无需部署。
+   Target,出站用 **API-key**(Basic 认证)。无需部署。`deploy.sh` 会幂等创建一个
+   软件项目(`JIRA_PROJECT_KEY`,默认 `ACGW`,含 `Task/Story/Bug` 等 issue type),
+   工具描述也会引导 agent 用该 project key、且 JQL 必须有界——避免误用只支持 `Idea`
+   的 discovery 项目导致 Jira 返回 400(被网关屏蔽为 "internal error")。
 
 服务 1–3 位于私有子网、仅 HTTP:80,由各自的 API Gateway HTTP API 在边缘用 **Cognito
 JWT 授权器**校验入站 token。Pod 内默认 `AUTH_DISABLED=true`;设为 `false` 可在 Pod

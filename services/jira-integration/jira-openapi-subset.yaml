@@ -19,17 +19,19 @@ paths:
       operationId: searchIssues
       summary: Search issues using JQL
       description: >
-        Uses the current Jira Cloud search endpoint (/rest/api/3/search/jql).
-        The legacy /rest/api/3/search was removed by Atlassian (returns 410).
-        Note: unbounded JQL is rejected - include a restriction such as a
-        project or a date bound (e.g. "created >= -365d ORDER BY created DESC").
+        Search Jira issues. Uses the current Jira Cloud search endpoint
+        (/rest/api/3/search/jql); the legacy /rest/api/3/search was removed by
+        Atlassian (returns 410). IMPORTANT: unbounded JQL is rejected - the JQL
+        MUST include a restriction such as a project or a date bound. Prefer
+        scoping to the demo project, e.g.
+        "project = ACGW ORDER BY created DESC".
       parameters:
         - name: jql
           in: query
           required: true
           description: >
             Bounded JQL query string, e.g.
-            "project = DEMO ORDER BY created DESC".
+            "project = ACGW ORDER BY created DESC".
           schema:
             type: string
         - name: maxResults
@@ -73,6 +75,11 @@ paths:
     post:
       operationId: createIssue
       summary: Create an issue
+      description: >
+        Create a Jira issue. Use the demo software project (project key "ACGW")
+        unless the user names another, and a valid issue type for it such as
+        "Task", "Story", or "Bug". Do NOT use a discovery project (its only
+        issue type is "Idea"), or the request fails with an HTTP 400.
       requestBody:
         required: true
         content:

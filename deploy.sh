@@ -231,6 +231,12 @@ export CLAUDE_OPENAPI_S3_URI="$(upload_spec services/claude-agent/openapi.yaml \
 # Jira (Service 4) is external SaaS; only wire it when JIRA_BASE_URL is set. Its
 # spec server URL is the Jira site itself (not an execute-api endpoint).
 if [[ -n "${JIRA_BASE_URL}" ]]; then
+  # Ensure the demo's Jira project exists (idempotent) so Quick agents always
+  # target a valid software project instead of, e.g., a discovery project whose
+  # only issue type is "Idea".
+  log "Ensuring Jira project '${JIRA_PROJECT_KEY:-ACGW}' exists"
+  $PY gateway/setup-jira-project.py
+
   JIRA_HOST="${JIRA_BASE_URL#https://}"; JIRA_HOST="${JIRA_HOST%%/*}"
   # The Jira subset hard-codes its server URL; substitute the site host in place
   # of the your-domain.atlassian.net placeholder line.

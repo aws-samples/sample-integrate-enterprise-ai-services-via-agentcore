@@ -86,6 +86,18 @@ Amazon Bedrock 控制台 → **AgentCore** → **Gateways** → **Create gateway
 - **MCP Server Target(3)**:直接与该 MCP 服务握手并聚合其工具,URL 末尾要带 `/mcp`。
 - 未配置 Jira 时可跳过 Target 4。
 
+> **为什么 Jira 用 OpenAPI Target,而不是 console 里的 "Integrations" connector?**
+> 添加 Target 时 console 会看到 **Integrations**(API 里是 `mcp.connector`),选 Jira
+> provider 就能用 AWS 预置的 Jira 集成,似乎更省事。但**第三方 connector 需要先在
+> AWS Marketplace 订阅对应的 partner tool** 才会在账号里变为可用——未订阅时用 API
+> 直接建 connector target 会报 `Connector integration jira is not available for this
+> account.`(实测 `jira` / `atlassian-jira` / `com.atlassian.jira` 等所有变体都如此;
+> 而 AWS 原生的 `bedrock-knowledge-bases` 只报缺参数,可见这是账号级订阅门槛,不是
+> ID 拼写问题)。此外 AWS 官方 Jira 集成走的是 **3-legged OAuth**(需 Jira 管理员安装
+> Forge app 并授权一组 scope),与本 Demo 的 **API token / Basic 认证** 机制不同。因此
+> 本方案对 Jira 统一采用可脚本化、用 API-key 出站的 **OpenAPI → MCP** Target。若你的
+> 账号已在 Marketplace 订阅了 Jira connector,可自行改用 Integrations Target。
+
 每个 Target 创建后进入同步,最终变为 **`READY`**。
 
 ![截图占位](images/step3-targets.png)
@@ -173,4 +185,9 @@ aws cognito-idp describe-user-pool-client --user-pool-id <userPoolId> \
 - **Target `FAILED`**:检查执行角色权限、S3 规范可达、`servers` 主机为有效
   `https://` 端点;修复后点 **Sync**。
 - **Jira `searchIssues` 报错**:Atlassian 已移除旧的 `/rest/api/3/search`,须用
-  `/rest/api/3/search/jql`(本项目规范已更新),且 JQL 需有界(加项目或时间限制)。
+  `/rest/api/3/search/jql`(本项目规范已更新),且 JQL 需有界(加项目或时间限制),
+  例如 `project = ACGW ORDER BY created DESC`。
+- **Jira `createIssue` 报 "internal error"**:网关把 Jira 的 HTTP 400 屏蔽成了通用
+  错误。常见原因是项目/issue type 不合法——discovery 项目只支持 `Idea`。`deploy.sh`
+  已幂等创建软件项目 `JIRA_PROJECT_KEY`(默认 `ACGW`,支持 `Task/Story/Bug`),
+  调用时用该 project key + 合法 issue type 即可。
