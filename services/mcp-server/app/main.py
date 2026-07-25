@@ -24,7 +24,10 @@ Starlette parent app so one uvicorn process on port 8080 serves both.
 # FastMCP introspects tool parameter annotations at registration time and does
 # not resolve stringized (PEP 563) annotations, so the type hints must remain
 # real objects.
+import os
+
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 from starlette.applications import Starlette
 from starlette.exceptions import HTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -35,10 +38,49 @@ from starlette.routing import Mount, Route
 from . import tools
 from .auth import require_auth
 
+# --- DNS rebinding protection (Host header validation) ----------------------
+# mcp >= 1.23 fixed GHSA-9h52-p55h-vw2f by shipping DNS rebinding protection.
+# Two consequences we must handle explicitly:
+#
+#   1. FastMCP AUTO-ENABLES the protection whenever its `host` setting is a
+#      loopback address - and `host` defaults to "127.0.0.1". Left implicit,
+#      only "localhost"/"127.0.0.1" Host headers are accepted and every request
+#      arriving through the internal ALB / API Gateway is rejected with
+#      HTTP 421 Misdirected Request.
+#   2. The Host header this pod actually sees is set by the fronting layers
+#      (API Gateway execute-api -> VPC Link -> internal ALB), so the allow-list
+#      has to be deployment-specific rather than hard-coded.
+#
+# So the behaviour is made explicit and configurable. MCP_ALLOWED_HOSTS is a
+# comma-separated allow-list (entries may use the SDK's "host:*" any-port form).
+# The k8s manifest sets it from the service's API Gateway + ALB hostnames.
+# Setting MCP_DNS_REBINDING_PROTECTION=false turns the check off entirely -
+# acceptable only because this service is not directly reachable: its ALB is
+# internal and only API Gateway can reach it over the VPC Link. Keep it on
+# wherever the pod could receive traffic from an untrusted client.
+def _transport_security() -> TransportSecuritySettings:
+    enabled = os.environ.get("MCP_DNS_REBINDING_PROTECTION", "true").lower() != "false"
+    hosts = [h.strip() for h in os.environ.get("MCP_ALLOWED_HOSTS", "").split(",") if h.strip()]
+    origins = [o.strip() for o in os.environ.get("MCP_ALLOWED_ORIGINS", "").split(",") if o.strip()]
+    if enabled and not hosts:
+        # An empty allow-list with the check on would reject everything, so fall
+        # back to the loopback defaults used for local runs and container probes.
+        hosts = ["127.0.0.1:*", "localhost:*", "[::1]:*"]
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=enabled,
+        allowed_hosts=hosts,
+        allowed_origins=origins,
+    )
+
+
 # --- MCP server + tools -----------------------------------------------------
 # stateless_http=True: each request is self-contained (no server-side session
 # affinity), which suits horizontal scaling behind an ALB and AgentCore Gateway.
-mcp = FastMCP("enterprise-kb", stateless_http=True)
+mcp = FastMCP(
+    "enterprise-kb",
+    stateless_http=True,
+    transport_security=_transport_security(),
+)
 
 
 @mcp.tool()

@@ -154,6 +154,13 @@ log "Updating kubeconfig"
 aws eks update-kubeconfig --name "$CLUSTER_NAME_OUT" --region "$AWS_REGION" \
   --role-arn "$KUBECTL_ROLE_ARN"
 
+# mcp >= 1.23 validates the Host header (DNS rebinding protection). The pod's
+# real front-door hostnames are only known after step 5 creates the API Gateway,
+# so apply with an empty allow-list now (the service falls back to loopback
+# defaults) and re-render the Deployment in step 5b with the resolved hosts.
+export MCP_DNS_REBINDING_PROTECTION="${MCP_DNS_REBINDING_PROTECTION:-true}"
+export MCP_ALLOWED_HOSTS=""
+
 log "Applying k8s manifests"
 for svc in langgraph-agent claude-agent mcp-server; do
   for m in deployment service; do
@@ -195,6 +202,22 @@ export CLAUDE_ENDPOINT="$(apigw claude-agent)"
 export MCP_ENDPOINT="$(apigw mcp-server)"
 [[ -n "$LANGGRAPH_ENDPOINT" && -n "$CLAUDE_ENDPOINT" && -n "$MCP_ENDPOINT" ]] \
   || die "API Gateway endpoints were not written."
+
+# --- 5b. re-apply the MCP Deployment with its Host allow-list ---------------
+# mcp >= 1.23 rejects requests whose Host header is not allow-listed (HTTP 421,
+# GHSA-9h52-p55h-vw2f). Allow both hostnames that can appear on the hop into the
+# pod: the API Gateway execute-api host and the internal ALB host (whichever
+# layer sets Host, the request is accepted). ":*" permits any port.
+MCP_APIGW_HOST="${MCP_ENDPOINT#https://}"; MCP_APIGW_HOST="${MCP_APIGW_HOST%%/*}"
+MCP_ALB_HOST="$(kubectl -n "$K8S_NAMESPACE" get ingress mcp-server \
+  -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || true)"
+MCP_ALLOWED_HOSTS="${MCP_APIGW_HOST},${MCP_APIGW_HOST}:*"
+[[ -n "$MCP_ALB_HOST" ]] && MCP_ALLOWED_HOSTS+=",${MCP_ALB_HOST},${MCP_ALB_HOST}:*"
+export MCP_ALLOWED_HOSTS
+
+log "Re-applying mcp-server with Host allow-list (${MCP_ALLOWED_HOSTS})"
+scripts/render-k8s.sh services/mcp-server/k8s/deployment.yaml | kubectl apply -f -
+kubectl -n "$K8S_NAMESPACE" rollout status deploy/mcp-server --timeout=300s
 
 # --- 6. upload OpenAPI specs to S3 -----------------------------------------
 # An aggregating MCP gateway exposes each target as MCP tools, so every target

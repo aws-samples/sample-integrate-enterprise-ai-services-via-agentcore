@@ -182,6 +182,15 @@ aws cognito-idp describe-user-pool-client --user-pool-id <userPoolId> \
   `MCP-Protocol-Version: 2025-06-18`。
 - **入站 401**:令牌须由 **gateway-client** 签发且在网关 Allowed clients 列表中,
   并带 `<project>/invoke` scope。
+- **`mcp-server` Target 调用报错 / 服务返回 `421 Misdirected Request`**:MCP SDK
+  `mcp >= 1.23` 默认启用 **DNS rebinding 防护**(校验 Host 头,修复
+  GHSA-9h52-p55h-vw2f)。FastMCP 的 `host` 默认是 `127.0.0.1`,此时会**自动开启**
+  该防护且只允许 localhost——经 API Gateway / 内部 ALB 转发进来的请求会全部 421。
+  本项目已把它显式化为环境变量:`MCP_ALLOWED_HOSTS`(逗号分隔的 Host 白名单,
+  支持 `host:*` 任意端口写法;`deploy.sh` 在 API Gateway 创建后自动填入
+  execute-api 与 ALB 两个主机名并重新 apply Deployment)、
+  `MCP_DNS_REBINDING_PROTECTION`(设为 `false` 可整体关闭)。注意白名单**不支持
+  域名通配符**,只支持精确主机与 `host:*`。`/health` 在 MCP mount 之外,不受影响。
 - **Target `FAILED`**:检查执行角色权限、S3 规范可达、`servers` 主机为有效
   `https://` 端点;修复后点 **Sync**。
 - **Jira `searchIssues` 报错**:Atlassian 已移除旧的 `/rest/api/3/search`,须用
