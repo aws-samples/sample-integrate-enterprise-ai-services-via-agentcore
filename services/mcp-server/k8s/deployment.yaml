@@ -34,6 +34,18 @@ spec:
             # config.env to also enforce Cognito JWT in-pod (defense in depth).
             - name: AUTH_DISABLED
               value: "${AUTH_DISABLED}"
+            # DNS rebinding protection (mcp >= 1.23, GHSA-9h52-p55h-vw2f). The
+            # SDK validates the Host header against an explicit allow-list; it
+            # supports exact hosts and the "host:*" any-port form, but NOT
+            # domain wildcards - so deploy.sh fills in this service's real
+            # front-door hostnames (API Gateway execute-api + internal ALB,
+            # since either layer may be the one setting Host on the hop to the
+            # pod). Empty on the first apply (the API does not exist yet);
+            # deploy.sh re-renders this Deployment once it does.
+            - name: MCP_DNS_REBINDING_PROTECTION
+              value: "${MCP_DNS_REBINDING_PROTECTION}"
+            - name: MCP_ALLOWED_HOSTS
+              value: "${MCP_ALLOWED_HOSTS}"
           readinessProbe:
             httpGet:
               path: /health
