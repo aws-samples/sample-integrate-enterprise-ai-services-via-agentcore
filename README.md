@@ -193,3 +193,11 @@ EKS(控制面 + 2× `t3.large` 节点)、3 个内网 ALB、NAT 网关、真实 B
 - 入站/出站全程 Cognito OAuth 2.0,无硬编码凭证。
 - 密钥存于 Cognito / AWS Secrets Manager,运行时解析。
 - Pod 以非 root 运行;Bedrock 访问经 IRSA 授权,不用静态密钥。
+
+## Security
+
+See [CONTRIBUTING](CONTRIBUTING.md#security-issue-notifications) for more information.
+
+## License
+
+This library is licensed under the MIT-0 License. See the LICENSE file.
