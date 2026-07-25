@@ -39,11 +39,22 @@ Amazon Bedrock 控制台 → **AgentCore** → **Gateways** → **Create gateway
 > `secretsmanager:GetSecretValue`(读凭证提供者的托管密钥——**缺此权限会导致所有
 > 工具调用报 "internal error"**)。`GatewayRoleArn` 角色已包含这些权限。
 
+**Step 1 - Define gateway details**:填 Gateway name,并在 **Permissions** 选
+**Use another role** → 选中 `deploy.sh` 创建的执行角色(栈输出 `GatewayRoleArn`)。
+
+![Step 1:定义网关名称与 IAM 执行角色](images/create-ac-gateway-1.png)
+
+**Step 2 - Configure Inbound Identity**:**Inbound Auth type** 选
+**Use JSON Web Tokens (JWT)**;**JWT schema configuration** 选
+**Use existing Identity provider configurations**(复用 `deploy.sh` 建好的
+Cognito,不要选 Quick create);**Discovery URL** 填栈输出 `CognitoDiscoveryUrl`。
+往下滚动在 **Allowed clients** 填 gateway-client ID。
+
+![Step 2:入站 JWT 与 Cognito Discovery URL](images/create-ac-gateway-2.png)
+
 约 1-3 分钟后状态变为 **`READY`**,详情页显示 **MCP endpoint URL**(形如
 `https://<gateway-id>.gateway.bedrock-agentcore.ap-northeast-1.amazonaws.com/mcp`),
 记下备用。
-
-![截图占位](images/step1-create-gateway.png)
 
 ---
 
@@ -98,9 +109,40 @@ Amazon Bedrock 控制台 → **AgentCore** → **Gateways** → **Create gateway
 > 本方案对 Jira 统一采用可脚本化、用 API-key 出站的 **OpenAPI → MCP** Target。若你的
 > 账号已在 Marketplace 订阅了 Jira connector,可自行改用 Integrations Target。
 
-每个 Target 创建后进入同步,最终变为 **`READY`**。
+**Step 3 - Add targets 入口**:**Select a target protocol** 选 **MCP target**;
+**Passthrough** 保持 **Do not use passthrough - default aggregated**——聚合模式才会
+把每个 Target 的工具暴露成 MCP 工具(这也是前文"HTTP Passthrough 不适用"的原因)。
 
-![截图占位](images/step3-targets.png)
+![Step 3:选择 MCP target 与聚合模式](images/create-ac-gateway-3.png)
+
+**Target 1 `langgraph-agent`(REST API → OpenAPI schema)**:**Target type** 选
+**REST API** → **OpenAPI schema** → **Define with an S3 resource**,填规范的
+S3 URI;**Outbound Auth** 选 **OAuth client**。
+
+![Target 1:OpenAPI schema + S3 + 出站 OAuth](images/create-ac-gateway-target-langgraph.png)
+
+> 这张图里同时能看到 **Integrations** 与 **Connectors - new** 两个 Target type,
+> 即下方说明中被 Marketplace 订阅门槛拦住的那条路径。
+
+**Target 2 `claude-agent`**:同 Target 1,只是 S3 URI 换成
+`.../claude-agent/openapi.yaml`;**OAuth client** 下拉选 `<project>-cognito-oauth`
+(步骤 2 里复用的出站凭证提供者)。
+
+![Target 2:claude-agent 的 S3 规范与 OAuth client](images/create-ac-gateway-target-claudeAgent.png)
+
+**Target 3 `mcp-server`(MCP server)**:**Target type** 选 **MCP server**,
+**MCP endpoint** 填 MCP 服务的 `execute-api` 端点 **加 `/mcp` 后缀**;
+**MCP listing mode** 用 **Default**(工具缓存在控制平面,需 Sync);
+**Outbound Auth** 同样选 **OAuth client**。
+
+![Target 3:MCP server 端点与 listing mode](images/create-ac-gateway-target-mcp.png)
+
+Target 4 `jira-cloud` 与 Target 1/2 同为 REST API → OpenAPI schema,区别只在
+**Outbound Auth 选 API Key**(HEADER / `Authorization` / 前缀 `Basic `)。
+
+每个 Target 创建后进入同步,最终 4 个全部变为 **`Ready`**:
+
+![4 个 Target 全部 Ready](images/create-ac-gateway-all-targets.png)
 
 ---
 
@@ -130,17 +172,95 @@ curl -s "<你的-manual-网关-MCP-endpoint>" \
 
 ---
 
-## 步骤 5:在 Amazon Quick / Kiro 中连接
+## 步骤 5:在 Amazon Quick 中连接并测试
 
-在客户端的 MCP 服务器配置中填写:
+Amazon Quick 通过 **MCP connector** 直接连到网关,由 Quick 自己用 client
+credentials 换取令牌,无需手工贴 `Bearer` 头。
 
-| 配置项 | 值 |
-|--------|-----|
-| **Server URL** | 你的 manual 网关 MCP endpoint |
-| **Transport** | Streamable HTTP |
-| **Authorization** | `Bearer <access_token>`(同上,gateway-client 签发)|
+### 5.1 打开 Connectors
 
-连接后列出工具并调用任意一个,确认返回正常。
+左侧导航 **More** → **Connectors**。
+
+![Quick:More → Connectors](images/quick-connector-1.png)
+
+### 5.2 新建 Model Context Protocol connector
+
+**Create for your team** 标签页 → 选 **Model Context Protocol** 卡片。
+
+![Quick:选择 Model Context Protocol 连接器](images/quick-connector-2-mcp.png)
+
+若此前已有 MCP 连接,会弹出提示;要新建就点 **No, create new**。
+
+![Quick:已存在 MCP 连接时选择新建](images/quick-connector-2-mcp-new.png)
+
+### 5.3 Connect - 填网关端点
+
+| 字段 | 值 |
+|------|-----|
+| **Name** | 任意,例如 `enterprise-service-integration` |
+| **MCP server endpoint** | 网关的 MCP endpoint(**含 `/mcp` 后缀**)|
+| **Connection type** / **Auth connection type** | **Public network** |
+
+![Quick 步骤 1:填写 MCP server endpoint](images/quick-connector-2-mcp-connect.png)
+
+### 5.4 Authenticate - 必须选 Service authentication
+
+| 字段 | 值 |
+|------|-----|
+| **Authentication method** | **Service authentication**(见下方说明)|
+| **Auth configuration** | **Service-to-service OAuth** |
+| **Client ID** / **Client secret** | **gateway-client** 的 ID 与密钥 |
+| **Token URL** | 栈输出 `CognitoTokenUrl` |
+
+![Quick 步骤 2:Service authentication + client credentials](images/quick-connector-2-mcp-auth.png)
+
+> **为什么不能选 User authentication?** 本项目的 gateway-client 是 M2M 客户端,
+> 只启用了 `client_credentials` 流程,且没有配置回调 URL。而 **User authentication /
+> Custom user based OAuth** 走的是 authorization_code,需要 Authorization URL 与
+> Redirect URL,填不出来也无法完成授权。选 **Service authentication** 才与
+> `client_credentials` 对应。
+
+### 5.5 Manage Tools & Permissions
+
+Quick 会列出从网关聚合到的全部工具,并按 **Read / Write** 分类(Write 类操作在会话
+中调用前会请求确认)。工具名形如 `claude-agent___sendMessage`、
+`jira-cloud___createIssue`、`mcp-server___search_knowledge_base`。
+
+![Quick 步骤 3:工具清单与读写权限](images/quick-connector-2-mcp-toolpermission.png)
+
+### 5.6 Publish
+
+选择可访问范围后点 **Publish**。
+
+![Quick 步骤 4:发布连接](images/quick-connector-2-mcp-publish.png)
+
+> 注意页面上的说明:service-to-service 认证的连接用于 **Automated workflows**,
+> **不能直接用在 Chat 或 Flows 里**;要在对话中试用,请通过 **Chat agents** 挂载该
+> connector(下面 5.8 的截图就是这样跑的)。
+
+### 5.7 确认连接就绪
+
+连接详情页 **Status** 应为 **Ready**,右侧 **Enabled tools** 列出全部聚合工具,
+可用 **Test action APIs** 直接试调。
+
+![Quick:连接详情与已启用工具列表](images/quick-connector-2-mcp-overview.png)
+
+### 5.8 端到端测试
+
+在会话中让 Quick 调用不同服务的工具,验证四条链路:
+
+**Service 2(Claude Agent,真实 Bedrock)**——创建会话并提问,Agent 返回订单状态:
+
+![Quick 测试:Claude Agent 会话与订单查询](images/quick-chat-1-claudeagent.png)
+
+**Service 1(LangGraph)+ Service 4(Jira)**——先问天气(LangGraph ReAct
+agent 调用 mock 工具),再在 `ACGW` 项目里创建 Bug ticket,成功返回 `ACGW-2`:
+
+![Quick 测试:LangGraph 问答与 Jira 建单](images/quick-chat-2-langgraph-jira.png)
+
+> Jira 建单请务必指定项目 key `ACGW` 与合法 issue type(如 `Bug`/`Task`);用
+> discovery 项目或非法类型会被 Jira 以 HTTP 400 拒绝,而网关会把它显示成笼统的
+> "internal error"。详见下方常见问题。
 
 ---
 
