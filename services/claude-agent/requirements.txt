@@ -7,5 +7,5 @@ httpx==0.28.1
 python-jose[cryptography]==3.3.0
 # Pin mcp explicitly so the resolver does not float between builds. Any 1.23+
 # release satisfies claude-agent-sdk (mcp<2.0.0,>=1.23.0).
-mcp==1.28.1
+mcp==1.30.0
 claude-agent-sdk==0.2.126
